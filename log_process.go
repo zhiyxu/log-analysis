@@ -6,16 +6,43 @@ import (
 	"time"
 )
 
+type Reader interface {
+	Read(chan string)
+}
+
+type Writer interface {
+	Write(chan string)
+}
+
 type LogProcess struct {
-	rc          chan string
-	wc          chan string
-	path        string // File path
+	rc chan string
+	wc chan string
+	// change to interface type
+	// then whatever struct implement interface could passed into
+	// e.g ReadFromStdin, ReadFromDB... not only ReadFromFile
+	// e.g WriteToFile, WriteToStdout... not only WriteToInfluxDB
+	// improve scalability a lot
+	read  Reader
+	write Writer
+}
+
+// a type of Reader
+type ReadFromFile struct {
+	path string // File path
+}
+
+func (r ReadFromFile) Read(rc chan string) {
+	message := "string"
+	rc <- message
+}
+
+// a type of Writer
+type WriteToInfluxDB struct {
 	InfluxDBDsn string // InfluxDB data source
 }
 
-func (l *LogProcess) ReadFromFile() {
-	message := "string"
-	l.rc <- message
+func (w WriteToInfluxDB) Write(wc chan string) {
+	fmt.Println(<-wc)
 }
 
 func (l *LogProcess) Process() {
@@ -23,21 +50,21 @@ func (l *LogProcess) Process() {
 	l.wc <- strings.ToUpper(data)
 }
 
-func (l *LogProcess) WriteToInfluxDB() {
-	fmt.Println(<-l.wc)
-}
-
 func main() {
 	lp := &LogProcess{
-		rc:          make(chan string),
-		wc:          make(chan string),
-		path:        "/tmp/access.log",
-		InfluxDBDsn: "username&password",
+		rc: make(chan string),
+		wc: make(chan string),
+		read: ReadFromFile{
+			path: "/tmp/access.log",
+		},
+		write: WriteToInfluxDB{
+			InfluxDBDsn: "username&password",
+		},
 	}
 
-	go lp.ReadFromFile()
+	go lp.read.Read(lp.rc)
 	go lp.Process()
-	go lp.WriteToInfluxDB()
+	go lp.write.Write(lp.wc)
 
 	time.Sleep(time.Second)
 }
