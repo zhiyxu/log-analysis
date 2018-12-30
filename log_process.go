@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/influxdata/influxdb/client/v2"
 )
 
 type Message struct {
@@ -75,8 +78,65 @@ type WriteToInfluxDB struct {
 }
 
 func (w WriteToInfluxDB) Write(wc chan *Message) {
+	// 1. initialize influxdb client
+	// 2. get data from write channel
+	// 3. write data into influxdb
+
+	split := strings.Split(w.InfluxDBDsn, "@")
+
+	// Create a new HTTPClient
+	c, err := client.NewHTTPClient(client.HTTPConfig{
+		Addr:     split[0],
+		Username: split[1],
+		Password: split[2],
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer c.Close()
+
 	for data := range wc {
-		fmt.Println(data)
+		// Create a new point batch
+		bp, err := client.NewBatchPoints(client.BatchPointsConfig{
+			Database:  split[3],
+			Precision: split[4],
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Create a point and add to batch
+		// Tags: Path, Method, Scheme, Status
+		// Fields: UpstreamTime, RequestTime, BytesSent
+		tags := map[string]string{
+			"Path":   data.Path,
+			"Method": data.Method,
+			"Scheme": data.Scheme,
+			"Status": data.Status,
+		}
+		fields := map[string]interface{}{
+			"UpstreamTime": data.UpstreamTime,
+			"RequestTime":  data.RequestTime,
+			"BytesSent":    data.BytesSent,
+		}
+
+		pt, err := client.NewPoint("nginx_log", tags, fields, data.TimeLocal)
+		if err != nil {
+			log.Fatal(err)
+		}
+		bp.AddPoint(pt)
+
+		// Write the batch
+		if err := c.Write(bp); err != nil {
+			log.Fatal(err)
+		}
+
+		// Close client resources
+		if err := c.Close(); err != nil {
+			log.Fatal(err)
+		}
+
+		log.Println("write success.")
 	}
 }
 
@@ -137,14 +197,22 @@ func (l *LogProcess) Process() {
 }
 
 func main() {
+
+	var path, InfluxDsn string
+
+	flag.StringVar(&path, "path", "./access.log", "read file path")
+	flag.StringVar(&InfluxDsn, "InfluxDsn",
+		"http://127.0.0.1:8086@zhiyxu@zhiyxu@db@s", "influx data source")
+	flag.Parse()
+
 	lp := &LogProcess{
 		rc: make(chan []byte),
 		wc: make(chan *Message),
 		read: ReadFromFile{
-			path: "./access.log",
+			path: path,
 		},
 		write: WriteToInfluxDB{
-			InfluxDBDsn: "username&password",
+			InfluxDBDsn: InfluxDsn,
 		},
 	}
 
